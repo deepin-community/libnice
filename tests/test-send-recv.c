@@ -497,11 +497,7 @@ validate_received_messages (TestIOStreamThreadData *data, gsize buffer_offset,
       g_assert_cmpuint (message->length, ==, 0);
     prev_message_len = message->length;
 
-    /* If the API was blocking, it should have completely filled the message. */
-    if (stream_api_is_blocking (test_data->stream_api) && data->reliable)
-      g_assert_cmpuint (message->length, ==, total_buf_len);
-
-    g_assert (message->from == NULL);
+    g_assert_true (message->from == NULL);
   }
 
   /* Free all messages. */
@@ -693,7 +689,7 @@ read_thread_agent_cb (GInputStream *input_stream, TestIOStreamThreadData *data)
 
   while (test_data->received_bytes < test_data->n_bytes) {
     GError *error = NULL;
-    NiceInputMessage *messages;
+    NiceInputMessage *messages = {0};
     guint n_messages;
     gint n_valid_messages;
 
@@ -1146,7 +1142,9 @@ test (gboolean reliable, StreamApi stream_api, gsize n_bytes, guint n_messages,
       &l_data.received_bytes, &l_data.received_messages);
 
   run_io_stream_test (deadlock_timeout, reliable, &callbacks[stream_api],
-      &l_data, NULL, &r_data, NULL);
+      &l_data, NULL, &r_data, NULL,
+      /* Ensure TCP has the same behavior as Pseudo-TCP in reliable mode: */
+      reliable ? TEST_IO_STREAM_OPTION_BYTESTREAM_TCP : 0);
 
   test_data_clear (&r_data);
   test_data_clear (&l_data);

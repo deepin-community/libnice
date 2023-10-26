@@ -1,8 +1,27 @@
-libnice (0.1.18-1) UNRELEASED; urgency=medium
+libnice (0.1.21-2) unstable; urgency=medium
 
-  * update
+  * Team upload
+  * Cherry-pick proposed patch to switch to gupnp-igd 1.6
+  * Switch dependencies to gupnp-igd 1.6
 
- -- Debian Telepathy maintainers <pkg-telepathy-maintainers@lists.alioth.debian.org>  Mon, 06 Jun 2022 08:57:52 -0400
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Thu, 17 Aug 2023 07:06:35 -0400
+
+libnice (0.1.21-1) unstable; urgency=medium
+
+  * New upstream version 0.1.21
+  * debian/libnice10.symbols: Add newly exported symbols
+  * debian/control: Bump Standards-Version to 4.6.2 (no further changes)
+  * Drop transition for old debug package migration.
+
+ -- Laurent Bigonville <bigon@debian.org>  Thu, 26 Jan 2023 19:07:33 +0100
+
+libnice (0.1.18-2) unstable; urgency=medium
+
+  * debian/rules: Add graphviz to the BDI, that should fix the FTBFS
+    (Closes: #997216)
+  * debian/control: Bump Standards-Version to 4.6.0 (no further changes)
+
+ -- Laurent Bigonville <bigon@debian.org>  Sun, 02 Jan 2022 10:52:32 +0100
 
 libnice (0.1.18-1) unstable; urgency=medium
 

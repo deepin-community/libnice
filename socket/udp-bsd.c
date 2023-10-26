@@ -51,6 +51,7 @@
 
 #include "udp-bsd.h"
 #include "agent-priv.h"
+#include "interfaces.h"
 
 #ifndef G_OS_WIN32
 #include <unistd.h>
@@ -79,7 +80,7 @@ struct UdpBsdSocketPrivate
 };
 
 NiceSocket *
-nice_udp_bsd_socket_new (NiceAddress *addr)
+nice_udp_bsd_socket_new (NiceAddress *addr, GError **error)
 {
   union {
     struct sockaddr_storage storage;
@@ -100,7 +101,7 @@ nice_udp_bsd_socket_new (NiceAddress *addr)
 
   if (name.storage.ss_family == AF_UNSPEC || name.storage.ss_family == AF_INET) {
     gsock = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_DATAGRAM,
-        G_SOCKET_PROTOCOL_UDP, NULL);
+        G_SOCKET_PROTOCOL_UDP, error);
     name.storage.ss_family = AF_INET;
 #ifdef HAVE_SA_LEN
     name.storage.ss_len = sizeof (struct sockaddr_in);
@@ -119,11 +120,38 @@ nice_udp_bsd_socket_new (NiceAddress *addr)
     return NULL;
   }
 
+#if defined(IP_UNICAST_IF) && defined(IPV6_UNICAST_IF)
+  if (addr) {
+    guint if_index = nice_interfaces_get_if_index_by_addr (addr);
+
+    if (if_index) {
+      guint level, optname;
+      GError *gerr = NULL;
+
+      if (nice_address_ip_version (addr) == 6) {
+        level = IPPROTO_IPV6;
+        optname = IPV6_UNICAST_IF;
+      } else {
+        level = IPPROTO_IP;
+        optname = IP_UNICAST_IF;
+      }
+
+      if_index = htonl (if_index);
+      if (!g_socket_set_option (gsock, level, optname, if_index, &gerr)) {
+        nice_debug ("Could not bind socket to specific interface: %s",
+                    gerr->message);
+        g_clear_error (&gerr);
+      }
+    }
+  }
+#endif
+
+
   /* GSocket: All socket file descriptors are set to be close-on-exec. */
   g_socket_set_blocking (gsock, false);
   gaddr = g_socket_address_new_from_native (&name.addr, sizeof (name));
   if (gaddr != NULL) {
-    gret = g_socket_bind (gsock, gaddr, FALSE, NULL);
+    gret = g_socket_bind (gsock, gaddr, FALSE, error);
     g_object_unref (gaddr);
   }
 
@@ -335,7 +363,7 @@ socket_send_messages (NiceSocket *sock, const NiceAddress *to,
       nice_address_to_string (&local_addr, local_addr_str);
       g_object_unref (gsocket);
 
-      nice_debug_verbose ("%s: udp-bsd socket %p %s:%u -> %s:%u: error: %s",
+      nice_debug ("%s: udp-bsd socket %p %s:%u -> %s:%u: error: %s",
           G_STRFUNC, sock,
           local_addr_str, nice_address_get_port (&local_addr),
           remote_addr_str, nice_address_get_port (&remote_addr),

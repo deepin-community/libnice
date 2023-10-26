@@ -6,15 +6,16 @@ Uploaders: Sjoerd Simons <sjoerd@debian.org>,
            Laurent Bigonville <bigon@debian.org>
 Build-Depends: debhelper-compat (= 13),
                gobject-introspection (>= 1.30.0),
-               graphviz,
                libgirepository1.0-dev (>= 1.30.0),
                libglib2.0-dev (>= 2.54),
                libgnutls28-dev (>= 2.12.0),
                libgstreamer1.0-dev,
-               libgupnp-igd-1.0-dev (>= 0.2.4),
+               libgupnp-igd-1.6-dev,
                meson (>= 0.52)
-Build-Depends-Indep: gtk-doc-tools <!nodoc>, libglib2.0-doc <!nodoc>
-Standards-Version: 4.5.1
+Build-Depends-Indep: graphviz <!nodoc>,
+                     gtk-doc-tools <!nodoc>,
+                     libglib2.0-doc <!nodoc>
+Standards-Version: 4.6.2
 Homepage: https://nice.freedesktop.org/
 Vcs-Git: https://salsa.debian.org/telepathy-team/libnice.git
 Vcs-Browser: https://salsa.debian.org/telepathy-team/libnice
@@ -44,7 +45,7 @@ Architecture: any
 Depends: gir1.2-nice-0.1 (= ${binary:Version}),
          libglib2.0-dev (>= 2.48),
          libgnutls28-dev (>= 2.12.0),
-         libgupnp-igd-1.0-dev (>= 0.2.4),
+         libgupnp-igd-1.6-dev,
          libnice10 (= ${binary:Version}),
          ${misc:Depends},
          ${shlibs:Depends}

@@ -2,10 +2,12 @@ libnice.so.10 libnice10 #MINVER#
 * Build-Depends-Package: libnice-dev
  nice_address_copy_to_sockaddr@Base 0.1.0
  nice_address_dup@Base 0.1.0
+ nice_address_dup_string@Base 0.1.21
  nice_address_equal@Base 0.1.0
  nice_address_equal_no_port@Base 0.1.13
  nice_address_free@Base 0.1.0
  nice_address_get_port@Base 0.1.0
+ nice_address_get_type@Base 0.1.21
  nice_address_init@Base 0.1.0
  nice_address_ip_version@Base 0.1.4
  nice_address_is_private@Base 0.1.0
@@ -21,6 +23,7 @@ libnice.so.10 libnice10 #MINVER#
  nice_agent_add_stream@Base 0.1.0
  nice_agent_attach_recv@Base 0.1.0
  nice_agent_close_async@Base 0.1.16
+ nice_agent_consent_lost@Base 0.1.21
  nice_agent_forget_relays@Base 0.1.7
  nice_agent_gather_candidates@Base 0.1.0
  nice_agent_generate_local_candidate_sdp@Base 0.1.4
@@ -69,8 +72,12 @@ libnice.so.10 libnice10 #MINVER#
  nice_candidate_free@Base 0.1.0
  nice_candidate_get_type@Base 0.1.16
  nice_candidate_new@Base 0.1.0
+ nice_candidate_relay_address@Base 0.1.21
+ nice_candidate_stun_server_address@Base 0.1.21
  nice_candidate_transport_get_type@Base 0.1.16
+ nice_candidate_transport_to_string@Base 0.1.21
  nice_candidate_type_get_type@Base 0.1.16
+ nice_candidate_type_to_string@Base 0.1.21
  nice_compatibility_get_type@Base 0.1.16
  nice_component_state_get_type@Base 0.1.16
  nice_component_state_to_string@Base 0.1.7
@@ -78,6 +85,7 @@ libnice.so.10 libnice10 #MINVER#
  nice_debug_disable@Base 0.1.0
  nice_debug_enable@Base 0.1.0
  nice_input_stream_new@Base 0.1.5
+ nice_interfaces_get_if_index_by_addr@Base 0.1.21
  nice_interfaces_get_ip_for_interface@Base 0.1.0
  nice_interfaces_get_local_interfaces@Base 0.1.0
  nice_interfaces_get_local_ips@Base 0.1.0

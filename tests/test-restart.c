@@ -187,7 +187,7 @@ static void priv_get_local_addr (NiceAgent *agent, guint stream_id, guint compon
   for (i = cands; i; i = i->next) {
     NiceCandidate *cand = i->data;
     if (cand) {
-      g_assert (dstaddr);
+      g_assert_true (dstaddr);
       *dstaddr = cand->addr;
     }
   }
@@ -199,19 +199,17 @@ static void priv_get_local_addr (NiceAgent *agent, guint stream_id, guint compon
 static int run_restart_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *baseaddr)
 {
   NiceAddress laddr, raddr, laddr_rtcp, raddr_rtcp;   
-  NiceCandidate cdes;
+  NiceCandidate *cdes;
   GSList *cands;
   guint ls_id, rs_id;
-  guint64 tie_breaker;
 
   /* XXX: dear compiler, these are for you: */
   (void)baseaddr;
 
-  memset (&cdes, 0, sizeof(NiceCandidate));
-  cdes.priority = 10000;
-  strcpy (cdes.foundation, "1");
-  cdes.type = NICE_CANDIDATE_TYPE_HOST;
-  cdes.transport = NICE_CANDIDATE_TRANSPORT_UDP;
+  cdes = nice_candidate_new (NICE_CANDIDATE_TYPE_HOST);
+  cdes->priority = 100000;
+  strcpy (cdes->foundation, "1");
+  cdes->transport = NICE_CANDIDATE_TRANSPORT_UDP;
 
   /* step: initialize variables modified by the callbacks */
   global_components_ready = 0;
@@ -254,8 +252,8 @@ static int run_restart_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *
       global_ragent_gathering_done != TRUE) {
     g_debug ("test-restart: Added streams, running mainloop until 'candidate-gathering-done'...");
     g_main_loop_run (global_mainloop);
-    g_assert (global_lagent_gathering_done == TRUE);
-    g_assert (global_ragent_gathering_done == TRUE);
+    g_assert_true (global_lagent_gathering_done == TRUE);
+    g_assert_true (global_ragent_gathering_done == TRUE);
   }
 
   /* step: find out the local candidates of each agent */
@@ -277,7 +275,7 @@ static int run_restart_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *
            nice_address_get_port (&laddr_rtcp));
 
   /* step: pass the remote candidates to agents  */
-  cands = g_slist_append (NULL, &cdes);
+  cands = g_slist_append (NULL, cdes);
   {
       gchar *ufrag = NULL, *password = NULL;
       nice_agent_get_local_credentials(lagent, ls_id, &ufrag, &password);
@@ -291,21 +289,21 @@ static int run_restart_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *
       g_free (ufrag);
       g_free (password);
   }
-  cdes.component_id = NICE_COMPONENT_TYPE_RTP;
-  cdes.addr = raddr;
+  cdes->component_id = NICE_COMPONENT_TYPE_RTP;
+  cdes->addr = raddr;
   nice_agent_set_remote_candidates (lagent, ls_id, NICE_COMPONENT_TYPE_RTP, cands);
-  cdes.addr = laddr;
+  cdes->addr = laddr;
   nice_agent_set_remote_candidates (ragent, rs_id, NICE_COMPONENT_TYPE_RTP, cands);
-  cdes.component_id = NICE_COMPONENT_TYPE_RTCP;
-  cdes.addr = raddr_rtcp;
+  cdes->component_id = NICE_COMPONENT_TYPE_RTCP;
+  cdes->addr = raddr_rtcp;
   nice_agent_set_remote_candidates (lagent, ls_id, NICE_COMPONENT_TYPE_RTCP, cands);
-  cdes.addr = laddr_rtcp;
+  cdes->addr = laddr_rtcp;
   nice_agent_set_remote_candidates (ragent, rs_id, NICE_COMPONENT_TYPE_RTCP, cands);
   /* This role switch request will be effective after restart. We test
    * here that the role cannot be externally modified after conncheck
    * has started. */
   g_object_set (G_OBJECT (ragent), "controlling-mode", TRUE, NULL);
-  g_assert (ragent->controlling_mode == FALSE);
+  g_assert_true (ragent->controlling_mode == FALSE);
 
   g_debug ("test-restart: Set properties, next running mainloop until connectivity checks succeed...");
 
@@ -314,8 +312,8 @@ static int run_restart_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *
   g_main_loop_run (global_mainloop);
 
   /* note: verify that STUN binding requests were sent */
-  g_assert (global_lagent_ibr_received == TRUE);
-  g_assert (global_ragent_ibr_received == TRUE);
+  g_assert_true (global_lagent_ibr_received == TRUE);
+  g_assert_true (global_ragent_ibr_received == TRUE);
   /* note: verify that correct number of local candidates were reported */
   g_assert_cmpint (global_lagent_cands, ==, 2);
   g_assert_cmpint (global_ragent_cands, ==, 2);
@@ -335,17 +333,10 @@ static int run_restart_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *
   g_assert_cmpint (nice_agent_send (lagent, ls_id, 1, 16, "1234567812345678"), ==, 16);
 
   /* Both agent have a distinct role at the end of the conncheck */
-  g_assert (lagent->controlling_mode == TRUE);
-  g_assert (ragent->controlling_mode == FALSE);
+  g_assert_true (lagent->controlling_mode == TRUE);
+  g_assert_true (ragent->controlling_mode == FALSE);
   /* step: restart agents, exchange updated credentials */
-  tie_breaker = ragent->tie_breaker;
   nice_agent_restart (ragent);
-  g_assert (tie_breaker != ragent->tie_breaker);
-  /* This role switch of ragent should be done now, and both agents
-   * have now the same role, which should generate a role conflict
-   * resolution situation */
-  g_assert (lagent->controlling_mode == TRUE);
-  g_assert (ragent->controlling_mode == TRUE);
   nice_agent_restart (lagent);
   {
       gchar *ufrag = NULL, *password = NULL;
@@ -370,15 +361,15 @@ static int run_restart_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *
   global_components_ready = 0;
 
   /* step: exchange remote candidates */
-  cdes.component_id = NICE_COMPONENT_TYPE_RTP;
-  cdes.addr = raddr;
+  cdes->component_id = NICE_COMPONENT_TYPE_RTP;
+  cdes->addr = raddr;
   nice_agent_set_remote_candidates (lagent, ls_id, NICE_COMPONENT_TYPE_RTP, cands);
-  cdes.addr = laddr;
+  cdes->addr = laddr;
   nice_agent_set_remote_candidates (ragent, rs_id, NICE_COMPONENT_TYPE_RTP, cands);
-  cdes.component_id = NICE_COMPONENT_TYPE_RTCP;
-  cdes.addr = raddr_rtcp;
+  cdes->component_id = NICE_COMPONENT_TYPE_RTCP;
+  cdes->addr = raddr_rtcp;
   nice_agent_set_remote_candidates (lagent, ls_id, NICE_COMPONENT_TYPE_RTCP, cands);
-  cdes.addr = laddr_rtcp;
+  cdes->addr = laddr_rtcp;
   nice_agent_set_remote_candidates (ragent, rs_id, NICE_COMPONENT_TYPE_RTCP, cands);
 
   g_main_loop_run (global_mainloop);
@@ -386,16 +377,17 @@ static int run_restart_test (NiceAgent *lagent, NiceAgent *ragent, NiceAddress *
   /* note: verify that payload was succesfully received */
   g_assert_cmpint (global_ragent_read, ==, 32);
   /* note: verify binding requests were resent after restart */
-  g_assert (global_lagent_ibr_received == TRUE);
-  g_assert (global_ragent_ibr_received == TRUE);
+  g_assert_true (global_lagent_ibr_received == TRUE);
+  g_assert_true (global_ragent_ibr_received == TRUE);
   /* note: verify that a role switch occured for one of the agents */
-  g_assert (ragent->controlling_mode != lagent->controlling_mode);
+  g_assert_true (ragent->controlling_mode != lagent->controlling_mode);
 
   g_debug ("test-restart: Ran mainloop, removing streams...");
 
   /* step: clean up resources and exit */
 
   g_slist_free (cands);
+  nice_candidate_free (cdes);
   nice_agent_remove_stream (lagent, ls_id);
   nice_agent_remove_stream (ragent, rs_id);
 

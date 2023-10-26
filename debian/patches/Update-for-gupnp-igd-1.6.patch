@@ -1,0 +1,31 @@
+From: =?utf-8?q?Tomasz_K=C5=82oczko?= <kloczek@github.com>
+Date: Sun, 16 Apr 2023 19:52:38 +0000
+Subject: Update for gupnp-igd-1.6
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+New gupnp-igd has been released.
+No significant changed in API so pkgconfig dependency can be simple
+bumped.
+
+Signed-off-by: Tomasz KÅ‚oczko <kloczek@github.com>
+
+Origin: https://gitlab.freedesktop.org/libnice/libnice/-/merge_requests/255
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 60ca250..551545f 100644
+--- a/meson.build
++++ b/meson.build
+@@ -278,7 +278,7 @@ gst_dep = dependency('gstreamer-base-1.0', version: gst_req,
+ cdata.set('HAVE_GSTREAMER', gst_dep.found(), description: 'Build GStreamer plugin')
+ 
+ # GUPnP IGD
+-gupnp_igd_dep = dependency('gupnp-igd-1.0', version: gupnp_igd_req, required: get_option('gupnp'))
++gupnp_igd_dep = dependency('gupnp-igd-1.6', version: gupnp_igd_req, required: get_option('gupnp'))
+ cdata.set('HAVE_GUPNP', gupnp_igd_dep.found(), description: 'Use the GUPnP IGD library')
+ 
+ libm = cc.find_library('m', required: false)

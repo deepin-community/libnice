@@ -173,6 +173,7 @@ nice_component_remove_socket (NiceAgent *agent, NiceComponent *cmp,
   stream = agent_find_stream (agent, cmp->stream_id);
 
   discovery_prune_socket (agent, nsocket);
+  refresh_prune_socket (agent, nsocket);
   if (stream)
     conn_check_prune_socket (agent, stream, cmp, nsocket);
 
@@ -185,11 +186,8 @@ nice_component_remove_socket (NiceAgent *agent, NiceComponent *cmp,
       continue;
     }
 
-    if (candidate == cmp->selected_pair.local) {
+    if (candidate == cmp->selected_pair.local)
       nice_component_clear_selected_pair (cmp);
-      agent_signal_component_state_change (agent, cmp->stream_id,
-          cmp->id, NICE_COMPONENT_STATE_FAILED);
-    }
 
     refresh_prune_candidate (agent, candidate);
     if (candidate->sockptr != nsocket && stream) {
@@ -197,8 +195,9 @@ nice_component_remove_socket (NiceAgent *agent, NiceComponent *cmp,
       conn_check_prune_socket (agent, stream, cmp, candidate->sockptr);
       nice_component_detach_socket (cmp, candidate->sockptr);
     }
-    agent_remove_local_candidate (agent, (NiceCandidate *) candidate);
-    nice_candidate_free ((NiceCandidate *) candidate);
+    if (stream)
+      agent_remove_local_candidate (agent, stream, (NiceCandidate *) candidate);
+    nice_candidate_free ((NiceCandidate *)candidate);
 
     cmp->local_candidates = g_slist_delete_link (cmp->local_candidates, i);
     i = next;
@@ -216,11 +215,8 @@ nice_component_remove_socket (NiceAgent *agent, NiceComponent *cmp,
       continue;
     }
 
-    if (candidate == cmp->selected_pair.remote) {
+    if (candidate == cmp->selected_pair.remote)
       nice_component_clear_selected_pair (cmp);
-      agent_signal_component_state_change (agent, cmp->stream_id,
-          cmp->id, NICE_COMPONENT_STATE_FAILED);
-    }
 
     if (stream)
       conn_check_prune_socket (agent, stream, cmp, candidate->sockptr);
@@ -289,7 +285,7 @@ nice_component_clean_turn_servers (NiceAgent *agent, NiceComponent *cmp)
       cmp->selected_pair.priority = 0;
       cmp->turn_candidate = candidate;
     } else {
-      agent_remove_local_candidate (agent, (NiceCandidate *) candidate);
+      agent_remove_local_candidate (agent, stream, (NiceCandidate *) candidate);
       relay_candidates = g_slist_append(relay_candidates, candidate);
     }
     cmp->local_candidates = g_slist_delete_link (cmp->local_candidates, i);
@@ -312,10 +308,10 @@ nice_component_clean_turn_servers (NiceAgent *agent, NiceComponent *cmp)
 static void
 nice_component_clear_selected_pair (NiceComponent *component)
 {
-  if (component->selected_pair.keepalive.tick_source != NULL) {
-    g_source_destroy (component->selected_pair.keepalive.tick_source);
-    g_source_unref (component->selected_pair.keepalive.tick_source);
-    component->selected_pair.keepalive.tick_source = NULL;
+  if (component->selected_pair.remote_consent.tick_source != NULL) {
+    g_source_destroy (component->selected_pair.remote_consent.tick_source);
+    g_source_unref (component->selected_pair.remote_consent.tick_source);
+    component->selected_pair.remote_consent.tick_source = NULL;
   }
 
   memset (&component->selected_pair, 0, sizeof(CandidatePair));
@@ -324,7 +320,7 @@ nice_component_clear_selected_pair (NiceComponent *component)
 /* Must be called with the agent lock held as it touches internal Component
  * state. */
 void
-nice_component_close (NiceAgent *agent, NiceComponent *cmp)
+nice_component_close (NiceAgent *agent, NiceStream *stream, NiceComponent *cmp)
 {
   IOCallbackData *data;
   GOutputVector *vec;
@@ -353,7 +349,7 @@ nice_component_close (NiceAgent *agent, NiceComponent *cmp)
         cmp->turn_candidate = NULL;
 
   while (cmp->local_candidates) {
-    agent_remove_local_candidate (agent, cmp->local_candidates->data);
+    agent_remove_local_candidate (agent, stream, cmp->local_candidates->data);
     nice_candidate_free (cmp->local_candidates->data);
     cmp->local_candidates = g_slist_delete_link (cmp->local_candidates,
         cmp->local_candidates);
@@ -389,6 +385,40 @@ nice_component_close (NiceAgent *agent, NiceComponent *cmp)
   while ((vec = g_queue_pop_head (&cmp->queued_tcp_packets)) != NULL) {
     g_free ((gpointer) vec->buffer);
     g_slice_free (GOutputVector, vec);
+  }
+
+  g_free (cmp->recv_buffer);
+  g_free (cmp->rfc4571_buffer);
+  cmp->recv_buffer = NULL;
+  cmp->rfc4571_buffer = NULL;
+}
+
+void
+nice_component_shutdown (NiceComponent *component, gboolean shutdown_read,
+    gboolean shutdown_write)
+{
+  GSList *i;
+
+  g_assert (shutdown_read || shutdown_write);
+
+  if (!pseudo_tcp_socket_is_closed (component->tcp)) {
+    PseudoTcpShutdown how;
+
+    if (shutdown_read && shutdown_write)
+      how = PSEUDO_TCP_SHUTDOWN_RDWR;
+    else if (shutdown_read)
+      how = PSEUDO_TCP_SHUTDOWN_RD;
+    else
+      how = PSEUDO_TCP_SHUTDOWN_WR;
+
+    pseudo_tcp_socket_shutdown (component->tcp, how);
+  }
+
+  for (i = component->socket_sources; i; i = i->next) {
+    SocketSource *source = i->data;
+    NiceSocket *sock = source->socket;
+    if (sock->type == NICE_SOCKET_TYPE_TCP_BSD)
+      g_socket_shutdown (sock->fileno, shutdown_read, shutdown_write, NULL);
   }
 }
 
@@ -435,7 +465,7 @@ nice_component_find_pair (NiceComponent *cmp, NiceAgent *agent, const gchar *lfo
  * session.
  */
 void
-nice_component_restart (NiceComponent *cmp)
+nice_component_restart (NiceComponent *cmp, NiceAgent *agent)
 {
   GSList *i;
   IncomingCheck *c;
@@ -462,6 +492,15 @@ nice_component_restart (NiceComponent *cmp)
 
   /* Reset the priority to 0 to make sure we get a new pair */
   cmp->selected_pair.priority = 0;
+
+  cmp->have_local_consent = TRUE;
+
+  /* The stun agent may contain references to the password previously
+   * stored in some remote candidates, freeed here, that were used by
+   * keep-alive stun requests. The stun agent must be reset to get rid
+   * of these references.
+   */
+  nice_agent_init_stun_agent (agent, &cmp->stun_agent);
 
   /* note: component state managed by agent */
 }
@@ -504,6 +543,7 @@ nice_component_update_selected_pair (NiceAgent *agent, NiceComponent *component,
   component->selected_pair.remote = pair->remote;
   component->selected_pair.priority = pair->priority;
   component->selected_pair.stun_priority = pair->stun_priority;
+  component->selected_pair.remote_consent.have = pair->remote_consent.have;
 
   nice_component_add_valid_candidate (agent, component,
       (NiceCandidate *) pair->remote);
@@ -585,6 +625,7 @@ nice_component_set_selected_remote_candidate (NiceComponent *component,
   component->selected_pair.local = (NiceCandidateImpl *) local;
   component->selected_pair.remote = (NiceCandidateImpl *) remote;
   component->selected_pair.priority = priority;
+  component->selected_pair.remote_consent.have = TRUE;
 
   /* Get into fallback mode where packets from any source is accepted once
    * this has been called. This is the expected behavior of pre-ICE SIP.
@@ -921,14 +962,13 @@ emit_io_callback_cb (gpointer user_data)
 /* This must be called with the agent lock *held*. */
 void
 nice_component_emit_io_callback (NiceAgent *agent, NiceComponent *component,
-    const guint8 *buf, gsize buf_len)
+    gsize buf_len)
 {
   guint stream_id, component_id;
   NiceAgentRecvFunc io_callback;
   gpointer io_user_data;
 
   g_assert (component != NULL);
-  g_assert (buf != NULL);
   g_assert (buf_len > 0);
 
   stream_id = component->stream_id;
@@ -945,8 +985,8 @@ nice_component_emit_io_callback (NiceAgent *agent, NiceComponent *component,
     return;
 
   g_assert (NICE_IS_AGENT (agent));
-  g_assert_cmpuint (stream_id, >, 0);
-  g_assert_cmpuint (component_id, >, 0);
+  g_assert (stream_id > 0);
+  g_assert (component_id > 0);
   g_assert (io_callback != NULL);
 
   /* Only allocate a closure if the callback is being deferred to an idle
@@ -955,7 +995,7 @@ nice_component_emit_io_callback (NiceAgent *agent, NiceComponent *component,
     /* Thread owns the main context, so invoke the callback directly. */
     agent_unlock_and_emit (agent);
     io_callback (agent, stream_id,
-        component_id, buf_len, (gchar *) buf, io_user_data);
+        component_id, buf_len, (gchar *) component->recv_buffer, io_user_data);
     agent_lock (agent);
   } else {
     IOCallbackData *data;
@@ -964,7 +1004,7 @@ nice_component_emit_io_callback (NiceAgent *agent, NiceComponent *component,
 
     /* Slow path: Current thread doesn’t own the Component’s context at the
      * moment, so schedule the callback in an idle handler. */
-    data = io_callback_data_new (buf, buf_len);
+    data = io_callback_data_new (component->recv_buffer, buf_len);
     g_queue_push_tail (&component->pending_io_messages,
         data);  /* transfer ownership */
 
@@ -1112,6 +1152,20 @@ nice_component_init (NiceComponent *component)
 
   g_queue_init (&component->queued_tcp_packets);
   g_queue_init (&component->incoming_checks);
+
+  component->have_local_consent = TRUE;
+
+/* Maximum size of a UDP packet’s payload, as the packet’s length field is 16b
+ * wide. */
+#define MAX_BUFFER_SIZE ((1 << 16) - 1)  /* 65535 */
+
+  component->recv_buffer = g_malloc (MAX_BUFFER_SIZE);
+  component->recv_buffer_size = MAX_BUFFER_SIZE;
+
+  component->rfc4571_buffer_size = sizeof (guint16) + G_MAXUINT16;
+  component->rfc4571_buffer = g_malloc (component->rfc4571_buffer_size);
+
+  component->turn_resolving_cancellable = g_cancellable_new ();
 }
 
 static void
@@ -1212,12 +1266,16 @@ nice_component_finalize (GObject *obj)
   cmp = NICE_COMPONENT (obj);
 
   /* Component should have been closed already. */
+  g_warn_if_fail (cmp->socket_sources == NULL);
   g_warn_if_fail (cmp->local_candidates == NULL);
   g_warn_if_fail (cmp->remote_candidates == NULL);
   g_warn_if_fail (g_queue_get_length (&cmp->incoming_checks) == 0);
 
   g_list_free_full (cmp->valid_candidates,
       (GDestroyNotify) nice_candidate_free);
+
+  g_cancellable_cancel (cmp->turn_resolving_cancellable);
+  g_clear_object (&cmp->turn_resolving_cancellable);
 
   g_clear_object (&cmp->tcp);
   g_clear_object (&cmp->stop_cancellable);
@@ -1286,6 +1344,9 @@ static gboolean
 component_source_prepare (GSource *source, gint *timeout_)
 {
   ComponentSource *component_source = (ComponentSource *) source;
+  /* We can’t be sure if the ComponentSource itself needs to be dispatched until
+   * poll() is called on all the child sources. */
+  gboolean skip_poll = FALSE;
   NiceAgent *agent;
   NiceComponent *component;
   GSList *parentl, *childl;
@@ -1302,6 +1363,11 @@ component_source_prepare (GSource *source, gint *timeout_)
           &component))
     goto done;
 
+  if (component->rfc4571_wakeup_needed) {
+    component->rfc4571_wakeup_needed = FALSE;
+    skip_poll = TRUE;
+    goto done;
+  }
 
   if (component->socket_sources_age ==
       component_source->component_socket_sources_age)
@@ -1375,9 +1441,7 @@ component_source_prepare (GSource *source, gint *timeout_)
   agent_unlock_and_emit (agent);
   g_object_unref (agent);
 
-  /* We can’t be sure if the ComponentSource itself needs to be dispatched until
-   * poll() is called on all the child sources. */
-  return FALSE;
+  return skip_poll;
 }
 
 static gboolean
@@ -1498,17 +1562,16 @@ TurnServer *
 turn_server_new (const gchar *server_ip, guint server_port,
     const gchar *username, const gchar *password, NiceRelayType type)
 {
-  TurnServer *turn = g_slice_new (TurnServer);
+  TurnServer *turn = g_slice_new0 (TurnServer);
 
   nice_address_init (&turn->server);
 
   turn->ref_count = 1;
-  if (nice_address_set_from_string (&turn->server, server_ip)) {
+  turn->server_port = server_port;
+  if (nice_address_set_from_string (&turn->server, server_ip))
     nice_address_set_port (&turn->server, server_port);
-  } else {
-    g_slice_free (TurnServer, turn);
-    return NULL;
-  }
+  else
+    turn->server_address = g_strdup (server_ip);
   turn->username = g_strdup (username);
   turn->password = g_strdup (password);
   turn->decoded_username =
@@ -1534,12 +1597,35 @@ turn_server_unref (TurnServer *turn)
   turn->ref_count--;
 
   if (turn->ref_count == 0) {
+    g_free (turn->server_address);
     g_free (turn->username);
     g_free (turn->password);
     g_free (turn->decoded_username);
     g_free (turn->decoded_password);
     g_slice_free (TurnServer, turn);
   }
+}
+
+TurnServer *
+turn_server_copy (TurnServer *turn)
+{
+  TurnServer *copy = g_slice_new0 (TurnServer);
+
+  copy->ref_count = 1;
+  copy->server = turn->server;
+  copy->server_address = g_strdup (turn->server_address);
+  copy->username = g_strdup (turn->username);
+  copy->password = g_strdup (turn->password);
+  copy->decoded_username = g_memdup (turn->decoded_username,
+      turn->decoded_username_len);
+  copy->decoded_password = g_memdup (turn->decoded_password,
+      turn->decoded_password_len);
+  copy->decoded_username_len = turn->decoded_username_len;
+  copy->decoded_password_len = turn->decoded_password_len;
+  copy->type = turn->type;
+  copy->preference = turn->preference;
+
+  return copy;
 }
 
 void
@@ -1640,4 +1726,28 @@ nice_component_get_sockets (NiceComponent *component)
   }
 
   return array;
+}
+
+guint
+nice_component_compute_rfc4571_headroom (NiceComponent *component)
+{
+  return component->rfc4571_buffer_offset - component->rfc4571_frame_offset;
+}
+
+gboolean
+nice_component_resolving_turn (NiceComponent *component)
+{
+  GList *item;
+
+  for (item = component->turn_servers; item; item = item->next) {
+    TurnServer *turn = item->data;
+
+    if (turn->resolution_failed)
+      continue;
+
+    if (!nice_address_is_valid (&turn->server))
+      return TRUE;
+  }
+
+  return FALSE;
 }

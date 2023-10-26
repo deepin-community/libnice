@@ -260,9 +260,11 @@ GType nice_agent_get_type (void);
 /**
  * NICE_AGENT_MAX_REMOTE_CANDIDATES:
  *
- * A hard limit for the number of remote candidates. This
- * limit is enforced to protect against malevolent remote
- * clients.
+ * Was a limit on the number of remote candidates one can set, but is
+ * no longer used by libnice itself.
+ *
+ * Deprecated: 0.1.20: Replace with dynamic value based on the
+ * #NiceAgent::max-connectivity-checks property
  */
 #define NICE_AGENT_MAX_REMOTE_CANDIDATES    25
 
@@ -400,6 +402,7 @@ typedef enum
 
 /**
  * NiceAgentOption:
+ * @NICE_AGENT_OPTION_NONE: No enabled options (Since: 0.1.19)
  * @NICE_AGENT_OPTION_REGULAR_NOMINATION: Enables regular nomination, default
  *  is aggrssive mode (see #NiceNominationMode).
  * @NICE_AGENT_OPTION_RELIABLE: Enables reliable mode, possibly using PseudoTCP, *  see nice_agent_new_reliable().
@@ -407,6 +410,8 @@ typedef enum
  * @NICE_AGENT_OPTION_ICE_TRICKLE: Enable ICE trickle mode
  * @NICE_AGENT_OPTION_SUPPORT_RENOMINATION: Enable renomination triggered by NOMINATION STUN attribute
  * proposed here: https://tools.ietf.org/html/draft-thatcher-ice-renomination-00
+ * @NICE_AGENT_OPTION_CONSENT_FRESHNESS: Enable RFC 7675 consent freshness support. (Since: 0.1.19)
+ * @NICE_AGENT_OPTION_BYTESTREAM_TCP: Use bytestream mode for reliable TCP connections. (Since: 0.1.20)
  *
  * These are options that can be passed to nice_agent_new_full(). They set
  * various properties on the agent. Not including them sets the property to
@@ -415,11 +420,14 @@ typedef enum
  * Since: 0.1.15
  */
 typedef enum {
+  NICE_AGENT_OPTION_NONE = 0,
   NICE_AGENT_OPTION_REGULAR_NOMINATION = 1 << 0,
   NICE_AGENT_OPTION_RELIABLE = 1 << 1,
   NICE_AGENT_OPTION_LITE_MODE = 1 << 2,
   NICE_AGENT_OPTION_ICE_TRICKLE = 1 << 3,
   NICE_AGENT_OPTION_SUPPORT_RENOMINATION = 1 << 4,
+  NICE_AGENT_OPTION_CONSENT_FRESHNESS = 1 << 5,
+  NICE_AGENT_OPTION_BYTESTREAM_TCP = 1 << 6,
 } NiceAgentOption;
 
 /**
@@ -574,7 +582,7 @@ nice_agent_set_port_range (
  * @agent: The #NiceAgent Object
  * @stream_id: The ID of the stream
  * @component_id: The ID of the component
- * @server_ip: The IP address of the TURN server
+ * @server_ip: The address of the TURN server
  * @server_port: The port of the TURN server
  * @username: The TURN username to use for the allocate
  * @password: The TURN password to use for the allocate
@@ -919,6 +927,9 @@ nice_agent_get_remote_candidates (
  * "ICE Restarts"), as well as when reacting (spec section 9.2.1.1.
  * "Detecting ICE Restart") to a restart.
  *
+ * If consent-freshness has been enabled on @agent, as specified in RFC7675
+ * then restarting streams will restore the local consent.
+ *
  * Returns: %TRUE on success %FALSE on error
  **/
 gboolean
@@ -937,6 +948,9 @@ nice_agent_restart (
  *
  * Unlike nice_agent_restart(), this applies to a single stream. It also
  * does not generate a new tie breaker.
+ *
+ * If consent-freshness has been enabled on @agent, as specified in RFC7675
+ * then restart @stream_id will restore the local consent for that stream.
  *
  * Returns: %TRUE on success %FALSE on error
  *
@@ -991,7 +1005,7 @@ nice_agent_attach_recv (
  * @component_id: the ID of the component to receive on
  * @buf: (array length=buf_len) (out caller-allocates): caller-allocated buffer
  * to write the received data into, of length at least @buf_len
- * @buf_len: length of @buf
+ * @buf_len: (in): length of @buf
  * @cancellable: (allow-none): a #GCancellable to allow the operation to be
  * cancelled from another thread, or %NULL
  * @error: (allow-none): return location for a #GError, or %NULL
@@ -1084,7 +1098,7 @@ nice_agent_recv_messages (
  * @component_id: the ID of the component to receive on
  * @buf: (array length=buf_len) (out caller-allocates): caller-allocated buffer
  * to write the received data into, of length at least @buf_len
- * @buf_len: length of @buf
+ * @buf_len: (in): length of @buf
  * @cancellable: (allow-none): a #GCancellable to allow the operation to be
  * cancelled from another thread, or %NULL
  * @error: (allow-none): return location for a #GError, or %NULL
@@ -1658,6 +1672,34 @@ gboolean
 nice_agent_peer_candidate_gathering_done (
     NiceAgent *agent,
     guint stream_id);
+
+/**
+ * nice_agent_consent_lost:
+ * @agent: The #NiceAgent Object
+ * @stream_id: The ID of the stream
+ * @component_id: The ID of the component
+ *
+ * Notifies the agent that consent to receive has been revoked.  This will
+ * cause the component to fail with 403 'Forbidden' all incoming STUN binding
+ * requests as specified in RFC 7675.
+ *
+ * A stream with a component in the consent-lost state can be reused by
+ * performing an ice restart with nice_agent_restart() or
+ * nice_agent_restart_stream().
+ *
+ * Calling the function only has an effect when @agent has been created with
+ * @NICE_AGENT_OPTION_CONSENT_FRESHNESS.
+ *
+ * Returns: %FALSE if the stream or component could not be found or consent
+ *     freshness is not enabled, %TRUE otherwise
+ *
+ * Since: 0.1.19
+ */
+gboolean
+nice_agent_consent_lost (
+    NiceAgent *agent,
+    guint stream_id,
+    guint component_id);
 
 /**
  * nice_agent_close_async:
