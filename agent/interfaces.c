@@ -69,6 +69,9 @@
 #endif
 
 #include <net/if.h>
+#ifdef HAVE_NET_IF_MEDIA_H
+ #include <net/if_media.h>
+#endif
 #include <arpa/inet.h>
 
 #endif /* G_OS_UNIX */
@@ -84,12 +87,10 @@ static const gchar *ignored_iface_prefix_list[] = {
 };
 #endif
 
-#if (defined(G_OS_UNIX) && defined(HAVE_GETIFADDRS)) || defined(G_OS_WIN32)
-/* Works on both UNIX and Windows. Magic! */
 static gchar *
 sockaddr_to_string (const struct sockaddr *addr)
 {
-  char addr_as_string[INET6_ADDRSTRLEN+1];
+  char addr_as_string[NI_MAXHOST];
   size_t addr_len;
 
   switch (addr->sa_family) {
@@ -117,7 +118,6 @@ sockaddr_to_string (const struct sockaddr *addr)
 
   return g_strdup (addr_as_string);
 }
-#endif
 
 #ifdef G_OS_UNIX
 
@@ -253,11 +253,6 @@ get_local_ips_ioctl (gboolean include_loopback)
   gint size = 0;
   struct ifreq *ifr;
   struct ifconf ifc;
-  union {
-    struct sockaddr_in *sin;
-    struct sockaddr *sa;
-  } sa;
-  
   GList *loopbacks = NULL;
 #ifdef IGNORED_IFACE_PREFIX
   const gchar **prefix;
@@ -297,9 +292,10 @@ get_local_ips_ioctl (gboolean include_loopback)
   for (ifr = ifc.ifc_req;
        (gchar *) ifr < (gchar *) ifc.ifc_req + ifc.ifc_len;
        ++ifr) {
+    gchar *addr_string;
 
     if (ioctl (sockfd, SIOCGIFFLAGS, ifr)) {
-      nice_debug ("Error : Unable to get IP information for interface %s."
+      nice_debug ("Error : Unable to get IP flags information for interface %s."
           " Skipping...", ifr->ifr_name);
       continue;  /* failed to get flags, skip it */
     }
@@ -312,14 +308,33 @@ get_local_ips_ioctl (gboolean include_loopback)
     if ((ifr->ifr_flags & IFF_RUNNING) == 0)
       continue;
 
-    sa.sa = &ifr->ifr_addr;
+    if (ioctl(sockfd, SIOCGIFADDR, ifr)) {
+      nice_debug ("Error : Unable to get IP address information for interface %s."
+          " Skipping...", ifr->ifr_name);
+      continue;  /* failed to get address, skip it */
+    }
+
+    if (ifr->ifr_addr.sa_family != AF_INET &&
+        ifr->ifr_addr.sa_family != AF_INET6)
+      continue;
+
+     /* Convert to a string. */
+    addr_string = sockaddr_to_string (&ifr->ifr_addr);
+    if (addr_string == NULL) {
+      nice_debug ("Failed to convert address to string for interface ‘%s’.",
+          ifr->ifr_name);
+      continue;
+    }
+
     nice_debug ("Interface:  %s", ifr->ifr_name);
-    nice_debug ("IP Address: %s", inet_ntoa (sa.sin->sin_addr));
+    nice_debug ("IP Address: %s", addr_string);
     if ((ifr->ifr_flags & IFF_LOOPBACK) == IFF_LOOPBACK){
-      if (include_loopback)
-        loopbacks = add_ip_to_list (loopbacks, g_strdup (inet_ntoa (sa.sin->sin_addr)), TRUE);
-      else
+      if (include_loopback) {
+        loopbacks = add_ip_to_list (loopbacks, addr_string, TRUE);
+      } else {
         nice_debug ("Ignoring loopback interface");
+        g_free (addr_string);
+      }
       continue;
     }
 
@@ -330,6 +345,7 @@ get_local_ips_ioctl (gboolean include_loopback)
         nice_debug ("Ignoring interface %s as it matches prefix %s",
             ifr->ifr_name, *prefix);
         ignored = TRUE;
+        g_free (addr_string);
         break;
       }
     }
@@ -338,10 +354,10 @@ get_local_ips_ioctl (gboolean include_loopback)
       continue;
 #endif
 
-    if (nice_interfaces_is_private_ip (sa.sa)) {
-      ips = add_ip_to_list (ips, g_strdup (inet_ntoa (sa.sin->sin_addr)), TRUE);
+    if (nice_interfaces_is_private_ip (&ifr->ifr_addr)) {
+      ips = add_ip_to_list (ips, addr_string, TRUE);
     } else {
-      ips = add_ip_to_list (ips, g_strdup (inet_ntoa (sa.sin->sin_addr)), FALSE);
+      ips = add_ip_to_list (ips, addr_string, FALSE);
     }
   }
 
@@ -354,6 +370,71 @@ get_local_ips_ioctl (gboolean include_loopback)
   return ips;
 }
 
+static guint
+get_local_if_index_by_addr_ioctl (NiceAddress *addr)
+{
+#ifdef HAVE_IFR_IFINDEX
+  gint sockfd;
+  gint size = 0;
+  struct ifreq *ifr;
+  struct ifconf ifc;
+  guint if_index = 0;
+
+  if ((sockfd = socket (AF_INET, SOCK_DGRAM, IPPROTO_IP)) < 0) {
+    nice_debug ("error : Cannot open socket to retrieve interface list");
+    return 0;
+  }
+
+  ifc.ifc_len = 0;
+  ifc.ifc_req = NULL;
+
+  /* Loop and get each interface the system has, one by one... */
+  do {
+    size += sizeof (struct ifreq);
+    /* realloc buffer size until no overflow occurs  */
+    if (NULL == (ifc.ifc_req = realloc (ifc.ifc_req, size))) {
+      nice_debug ("Error : Out of memory while allocation interface"
+          "configuration structure");
+      close (sockfd);
+      return 0;
+    }
+    ifc.ifc_len = size;
+
+    if (ioctl (sockfd, SIOCGIFCONF, &ifc)) {
+      perror ("ioctl SIOCFIFCONF");
+      close (sockfd);
+      free (ifc.ifc_req);
+      return 0;
+    }
+  } while (size <= ifc.ifc_len);
+
+
+  /* Loop throught the interface list and get the IP address of each IF */
+  for (ifr = ifc.ifc_req;
+       (gchar *) ifr < (gchar *) ifc.ifc_req + ifc.ifc_len;
+       ++ifr) {
+    NiceAddress *myaddr = (NiceAddress *) &ifr->ifr_addr;
+
+    if (!nice_address_equal_no_port (myaddr, addr))
+      continue;
+    if (ifr->ifr_ifindex == 0)
+      continue;
+
+    if_index = ifr->ifr_ifindex;
+    break;
+  }
+
+  free (ifc.ifc_req);
+  close (sockfd);
+
+  return if_index;
+#else
+  g_critical ("getifaddrs() should not fail on a platform that doesn't"
+      " include ifr_index in the struct ifreq. Please report the bug.");
+  return 0;
+#endif
+}
+
 #ifdef HAVE_GETIFADDRS
 
 GList *
@@ -361,6 +442,7 @@ nice_interfaces_get_local_ips (gboolean include_loopback)
 {
   GList *ips = NULL;
   struct ifaddrs *ifa, *results;
+  int sockfd = -1;
   GList *loopbacks = NULL;
 #ifdef IGNORED_IFACE_PREFIX
   const gchar **prefix;
@@ -388,6 +470,34 @@ nice_interfaces_get_local_ips (gboolean include_loopback)
     if (ifa->ifa_addr == NULL)
       continue;
 
+    if (ifa->ifa_addr->sa_family != AF_INET &&
+        ifa->ifa_addr->sa_family != AF_INET6)
+      continue;
+
+#ifdef __APPLE__
+    if (g_str_has_prefix (ifa->ifa_name, "awdl") ||
+        g_str_has_prefix (ifa->ifa_name, "llw"))
+      continue;
+#endif
+
+#ifdef HAVE_NET_IF_MEDIA_H
+    {
+      struct ifmediareq ifmr;
+
+      if (sockfd == -1)
+        sockfd = socket (AF_INET, SOCK_DGRAM, 0);
+
+      memset (&ifmr, 0, sizeof (ifmr));
+      g_strlcpy (ifmr.ifm_name, ifa->ifa_name, sizeof (ifmr.ifm_name));
+
+      if (ioctl (sockfd, SIOCGIFMEDIA, &ifmr) == 0 &&
+          (ifmr.ifm_status & IFM_AVALID) != 0 &&
+          (ifmr.ifm_status & IFM_ACTIVE) == 0) {
+        continue;
+      }
+    }
+#endif
+
     /* Convert to a string. */
     addr_string = sockaddr_to_string (ifa->ifa_addr);
     if (addr_string == NULL) {
@@ -395,6 +505,18 @@ nice_interfaces_get_local_ips (gboolean include_loopback)
           ifa->ifa_name);
       continue;
     }
+
+#ifdef __APPLE__
+    {
+      gboolean is_unused_utun_device =
+          g_str_has_prefix (ifa->ifa_name, "utun") &&
+          g_str_has_prefix (addr_string, "fe80::");
+      if (is_unused_utun_device) {
+        g_free (addr_string);
+        continue;
+      }
+    }
+#endif
 
     nice_debug ("Interface:  %s", ifa->ifa_name);
     nice_debug ("IP Address: %s", addr_string);
@@ -430,6 +552,9 @@ nice_interfaces_get_local_ips (gboolean include_loopback)
       ips = add_ip_to_list (ips, addr_string, FALSE);
   }
 
+  if (sockfd != -1)
+    close (sockfd);
+
   freeifaddrs (results);
 
   if (loopbacks)
@@ -438,12 +563,60 @@ nice_interfaces_get_local_ips (gboolean include_loopback)
   return ips;
 }
 
+guint
+nice_interfaces_get_if_index_by_addr (NiceAddress *addr)
+{
+  struct ifaddrs *ifa, *results;
+  guint if_index = 0;
+
+  if (getifaddrs (&results) < 0) {
+    nice_debug ("Failed to retrieve list of network interfaces with \"getifaddrs\": %s."
+      "Trying to use fallback ...", strerror (errno));
+    return get_local_if_index_by_addr_ioctl (addr);
+  }
+
+  /* Loop through the interface list and get the IP address of each IF */
+  for (ifa = results; ifa; ifa = ifa->ifa_next) {
+    NiceAddress *ifa_addr = (NiceAddress *) ifa->ifa_addr;
+
+    /* no ip address from interface that is down */
+    if ((ifa->ifa_flags & IFF_UP) == 0)
+      continue;
+
+    /* no ip address from interface that isn't running */
+    if ((ifa->ifa_flags & IFF_RUNNING) == 0)
+      continue;
+
+    if (ifa->ifa_addr == NULL || ifa->ifa_name == NULL)
+      continue;
+
+    if (!nice_address_equal_no_port (ifa_addr, addr))
+      continue;
+
+    if_index = if_nametoindex (ifa->ifa_name);
+
+    if (if_index != 0)
+      break;
+  }
+
+  freeifaddrs (results);
+
+  return if_index;
+}
+
 #else /* ! HAVE_GETIFADDRS */
 
 GList *
 nice_interfaces_get_local_ips (gboolean include_loopback)
 {
   return get_local_ips_ioctl (include_loopback);
+}
+
+
+guint
+nice_interfaces_get_if_index_by_addr (NiceAddress *addr)
+{
+  return get_local_if_index_by_addr_ioctl (addr);
 }
 
 #endif /* HAVE_GETIFADDRS */
@@ -572,7 +745,7 @@ nice_interfaces_get_local_ips (gboolean include_loopback)
 #ifdef IGNORED_IFACE_PREFIX
   const gchar **prefix;
   gboolean ignored;
-  const char output[256];
+  char output[256];
 #endif
 
   addresses = _nice_get_adapters_addresses ();
@@ -675,7 +848,6 @@ nice_interfaces_get_ip_for_interface (gchar *interface_name)
     return NULL;
 
   for (a = addresses; a != NULL; a = a->Next) {
-    IP_ADAPTER_UNICAST_ADDRESS *unicast;
     gchar *name;
 
     /* Various conditions for ignoring the interface. */
@@ -727,6 +899,49 @@ out:
 
   return ret;
 }
+
+
+guint
+nice_interfaces_get_if_index_by_addr (NiceAddress *addr)
+{
+  IP_ADAPTER_ADDRESSES *addresses, *a;
+  IP_ADAPTER_UNICAST_ADDRESS *unicast;
+  guint if_index = 0;
+
+  addresses = _nice_get_adapters_addresses ();
+  if (!addresses)
+    return NULL;
+
+  for (a = addresses; a != NULL; a = a->Next) {
+    /* Various conditions for ignoring the interface. */
+    if (a->OperStatus == IfOperStatusDown ||
+        a->OperStatus == IfOperStatusNotPresent ||
+        a->OperStatus == IfOperStatusLowerLayerDown) {
+      continue;
+    }
+
+    /* Grab the interface’s ipv4 unicast addresses. */
+    for (unicast = a->FirstUnicastAddress;
+         unicast != NULL; unicast = unicast->Next) {
+      NiceAddress *uni_addr = (NiceAddress *) unicast->Address.lpSockaddr;
+
+      if (nice_address_equal_no_port (uni_addr, addr)) {
+        if (unicast->Address.lpSockaddr->sa_family == AF_INET)
+          if_index = a->IfIndex;
+        else if (unicast->Address.lpSockaddr->sa_family == AF_INET6)
+          if_index = a->Ipv6IfIndex;
+        goto out;
+      }
+    }
+  }
+
+out:
+  g_free (addresses);
+
+  return if_index;
+}
+
+
 
 
 #else /* G_OS_WIN32 */

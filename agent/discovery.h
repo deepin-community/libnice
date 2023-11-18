@@ -94,6 +94,7 @@ void refresh_prune_stream_async (NiceAgent *agent, NiceStream *stream,
 void refresh_prune_candidate (NiceAgent *agent, NiceCandidateImpl *candidate);
 void refresh_prune_candidate_async (NiceAgent *agent, NiceCandidateImpl *cand,
   NiceTimeoutLockedCallback function);
+void refresh_prune_socket (NiceAgent *agent, NiceSocket *nicesock);
 
 
 void discovery_free (NiceAgent *agent);
@@ -127,9 +128,10 @@ discovery_add_relay_candidate (
   NiceAddress *address,
   NiceCandidateTransport transport,
   NiceSocket *base_socket,
-  TurnServer *turn);
+  TurnServer *turn,
+  uint32_t *lifetime);
 
-NiceCandidate*
+void
 discovery_add_server_reflexive_candidate (
   NiceAgent *agent,
   guint stream_id,
@@ -137,6 +139,7 @@ discovery_add_server_reflexive_candidate (
   NiceAddress *address,
   NiceCandidateTransport transport,
   NiceSocket *base_socket,
+  const NiceAddress *server_address,
   gboolean nat_assisted);
 
 void
@@ -145,7 +148,8 @@ discovery_discover_tcp_server_reflexive_candidates (
   guint stream_id,
   guint component_id,
   NiceAddress *address,
-  NiceSocket *base_socket);
+  NiceSocket *base_socket,
+  const NiceAddress *server_address);
 
 NiceCandidate*
 discovery_add_peer_reflexive_candidate (

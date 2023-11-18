@@ -1,3 +1,34 @@
+libnice 0.1.21 (2023-01-07)
+===========================
+Only use `ifr_ifindex` if OS supports it, fixes build on iOS and FreeBSD
+
+libnice 0.1.20 (2023-01-06)
+===========================
+Remove support for GStreamer 0.10 builds
+Add macro to check LIBNICE version
+Added utility function to get the STUN server from a candidate
+Support additional header in built-in HTTP proxy client
+Add boxed type for NiceAddress for bindings
+Add API to get the interface index for a local address
+Explicitly bind to a specific interface when creating UDP sockets
+Limit the number of stored incoming checks based on a property
+Do asynchronous DNS resolution for STUN and TURN servers
+Add introspection friendly API to get an allocated string from a NiceCandidate
+Enable gst-full to link in a single element
+
+libnice 0.1.19 (2022-05-03)
+===========================
+Allow incoming connchecks before remote candidates are set, allows for connection based on received bind requests
+Implement RFC 7675 for Consent Freshness
+Use a single server reflexive and local relay candidate, reduces useless duplicated local candidates
+Improved ICE restart implementation
+Use Windows native crypto API, removing the need for OpenSSL
+Add bytestream ICE-TCP and improve ICE-TCP
+Add API to know if a NiceAddress is link-local
+Add API to extact the relay address from a relayed NiceAddress
+Improve support for detection addresses on Android, iOS, macOS
+A number of bug fixes
+
 libnice 0.1.18 (2020-10-20)
 ===========================
 Remove the autotools build system, now only meson is available
