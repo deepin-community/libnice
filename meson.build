@@ -1,5 +1,5 @@
 project('libnice', 'c',
-  version: '0.1.18',
+  version: '0.1.21',
   meson_version : '>= 0.52',
   default_options : ['warning_level=1', 'buildtype=debugoptimized'])
 
@@ -11,7 +11,7 @@ version_micro = version_arr[2]
 if version_arr.length() == 4
   version_nano = version_arr[3]
 else
-  version_nano = 0
+  version_nano = '0'
 endif
 
 # maintain compatibility with the previous libtool versioning
@@ -20,7 +20,7 @@ endif
 # B is the ABI age, change it on new APIs that don't break existing ones, changing it resets C to 0
 # C is the revision, change on new updates that don't change APIs
 soversion = 10
-libversion = '10.11.0'
+libversion = '10.13.1'
 
 glib_req = '>= 2.54'
 gnutls_req = '>= 2.12.0'
@@ -78,7 +78,20 @@ add_project_arguments('-D_GNU_SOURCE',
   '-DHAVE_CONFIG_H',
   '-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_' + glib_req_minmax_str,
   '-DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_' + glib_req_minmax_str,
+  '-DNICE_VERSION_MAJOR=' + version_major,
+  '-DNICE_VERSION_MINOR=' + version_minor,
+  '-DNICE_VERSION_MICRO=' + version_micro,
+  '-DNICE_VERSION_NANO=' + version_nano,
   language: 'c')
+
+version_conf = configuration_data()
+version_conf.set('NICE_VERSION_MAJOR', version_major)
+version_conf.set('NICE_VERSION_MINOR', version_minor)
+version_conf.set('NICE_VERSION_MICRO', version_micro)
+version_conf.set('NICE_VERSION_NANO', version_nano)
+nice_version_h = configure_file(output: 'nice-version.h',
+  install_dir: get_option('includedir') / 'nice',
+  configuration: version_conf)
 
 cdata = configuration_data()
 
@@ -91,7 +104,7 @@ cdata.set('NICEAPI_EXPORT', true,
   description: 'Public library function implementation')
 
 # headers
-foreach h : ['arpa/inet.h', 'net/in.h', 'netdb.h', 'ifaddrs.h', 'unistd.h']
+foreach h : ['arpa/inet.h', 'net/in.h', 'net/if_media.h', 'netdb.h', 'ifaddrs.h', 'unistd.h']
   if cc.has_header(h)
     define = 'HAVE_' + h.underscorify().to_upper()
     cdata.set(define, 1)
@@ -105,6 +118,10 @@ foreach f : ['poll', 'getifaddrs']
     cdata.set(define, 1)
   endif
 endforeach
+
+if cc.has_member('struct ifreq', 'ifr_ifindex', prefix: '#include <net/if.h>')
+  cdata.set('HAVE_IFR_IFINDEX', 1)
+endif
 
 if cc.has_argument('-fno-strict-aliasing')
   add_project_arguments('-fno-strict-aliasing', language: 'c')
@@ -190,24 +207,25 @@ gthread_dep = dependency('gthread-2.0',
 # Cryto library
 opt_cryptolib = get_option('crypto-library')
 message('Crypto library requested: ' + opt_cryptolib)
-if opt_cryptolib != 'openssl'
+crypto_dep = dependency('', required: false) # special always not found
+if opt_cryptolib == 'auto' and host_machine.system() == 'windows'
+  crypto_dep = cc.find_library('advapi32')
+  cdata.set('USE_WIN32_CRYPTO', crypto_dep.found())
+endif
+
+if not crypto_dep.found() and opt_cryptolib != 'openssl'
   crypto_dep = dependency('gnutls', version: gnutls_req, required: false)
   cdata.set('HAVE_GNUTLS', crypto_dep.found())
-  if not crypto_dep.found() and opt_cryptolib == 'auto'
-    crypto_dep = dependency('openssl', required: false,
-      fallback: ['openssl', 'openssl_dep'])
-    cdata.set('HAVE_OPENSSL', crypto_dep.found())
-  endif
-else
-  crypto_dep = dependency('openssl', required: false)
-  cdata.set('HAVE_OPENSSL', crypto_dep.found())
-  if not crypto_dep.found() and openssl == 'auto'
-    crypto_dep = dependency('gnutls', version: gnutls_req, required: false)
-    cdata.set('HAVE_GNUTLS', crypto_dep.found())
-  endif
 endif
 
 if not crypto_dep.found() and opt_cryptolib != 'gnutls'
+  crypto_dep = dependency('openssl', required: false,
+			  fallback: ['openssl', 'openssl_dep'])
+  cdata.set('HAVE_OPENSSL', crypto_dep.found())
+endif
+
+crypto_found = crypto_dep.found()
+if not crypto_found and opt_cryptolib != 'gnutls'
   # MSVC builds of OpenSSL does not generate pkg-config files,
   # so we check for it manually here in this case, if we can't find those files
   # Based on the CMake check for OpenSSL in CURL's CMakeLists.txt,
@@ -237,10 +255,12 @@ if not crypto_dep.found() and opt_cryptolib != 'gnutls'
 
   if libcrypto_dep.found() and libssl_dep.found()
     crypto_dep = [libcrypto_dep, libssl_dep]
+    cdata.set('HAVE_OPENSSL', true)
+    crypto_found = true
   endif
 endif
 
-if not crypto_dep.found()
+if not crypto_found
   if opt_cryptolib == 'gnutls'
     error('GnuTLS requested as crypto library, but not found')
   elif opt_cryptolib == 'openssl'

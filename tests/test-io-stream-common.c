@@ -61,7 +61,7 @@ gboolean started;
 	  g_main_context_iteration (context, FALSE);	\
 	}						\
 							\
-      g_assert (!(var));				\
+      g_assert_true (!(var));				\
     }
 
 static gboolean timer_cb (gpointer pointer)
@@ -177,7 +177,7 @@ candidate_gathering_done_cb (NiceAgent *agent, guint stream_id,
   g_free (password);
 
   cands = nice_agent_get_local_candidates (agent, id, 1);
-  g_assert (cands != NULL);
+  g_assert_true (cands != NULL);
 
   nice_agent_set_remote_candidates (other, other_id, 1, cands);
 
@@ -192,7 +192,7 @@ reliable_transport_writable_cb (NiceAgent *agent, guint stream_id,
 {
   TestIOStreamThreadData *data = user_data;
 
-  g_assert (data->reliable);
+  g_assert_true (data->reliable);
 
   /* Signal writeability. */
   g_mutex_lock (&data->write_mutex);
@@ -205,7 +205,7 @@ reliable_transport_writable_cb (NiceAgent *agent, guint stream_id,
     GOutputStream *output_stream;
 
     io_stream = g_object_get_data (G_OBJECT (agent), "io-stream");
-    g_assert (io_stream != NULL);
+    g_assert_true (io_stream != NULL);
     output_stream = g_io_stream_get_output_stream (io_stream);
 
     data->callbacks->reliable_transport_writable (output_stream, agent,
@@ -243,7 +243,8 @@ new_selected_pair_cb (NiceAgent *agent, guint stream_id, guint component_id,
 
 static NiceAgent *
 create_agent (gboolean controlling_mode, TestIOStreamThreadData *data,
-    GMainContext **main_context, GMainLoop **main_loop)
+    GMainContext **main_context, GMainLoop **main_loop,
+    TestIOStreamOption flags)
 {
   NiceAgent *agent;
   NiceAddress base_addr;
@@ -253,19 +254,31 @@ create_agent (gboolean controlling_mode, TestIOStreamThreadData *data,
   *main_context = g_main_context_new ();
   *main_loop = g_main_loop_new (*main_context, FALSE);
 
-  /* Use Google compatibility to ignore credentials. */
   if (data->reliable)
-    agent = nice_agent_new_reliable (*main_context, NICE_COMPATIBILITY_GOOGLE);
+    agent = nice_agent_new_reliable (*main_context, NICE_COMPATIBILITY_RFC5245);
   else
-    agent = nice_agent_new (*main_context, NICE_COMPATIBILITY_GOOGLE);
+    agent = nice_agent_new (*main_context, NICE_COMPATIBILITY_RFC5245);
 
   g_object_set (G_OBJECT (agent),
       "controlling-mode", controlling_mode,
       "upnp", FALSE,
       NULL);
 
+  if (flags & TEST_IO_STREAM_OPTION_TCP_ONLY) {
+    g_object_set (G_OBJECT (agent),
+        "ice-udp", FALSE,
+        "ice-tcp", TRUE,
+        NULL);
+  }
+
+  if (flags & TEST_IO_STREAM_OPTION_BYTESTREAM_TCP) {
+    g_object_set (G_OBJECT (agent),
+        "bytestream-tcp", TRUE,
+        NULL);
+  }
+
   /* Specify which local interface to use. */
-  g_assert (nice_address_set_from_string (&base_addr, "127.0.0.1"));
+  g_assert_true (nice_address_set_from_string (&base_addr, "127.0.0.1"));
   nice_agent_add_local_address (agent, &base_addr);
 
   /* Hook up signals. */
@@ -311,6 +324,28 @@ add_stream (NiceAgent *agent)
 }
 
 static void
+swap_credentials (NiceAgent *agent)
+{
+  guint stream_id;
+  gchar *ufrag, *password;
+  NiceAgent *other_agent;
+  guint other_stream_id;
+
+  stream_id = GPOINTER_TO_UINT (
+      g_object_get_data (G_OBJECT (agent), "stream-id"));
+  nice_agent_get_local_credentials (agent, stream_id, &ufrag, &password);
+
+  other_agent = g_object_get_data (G_OBJECT (agent), "other-agent");
+  other_stream_id = GPOINTER_TO_UINT (
+      g_object_get_data (G_OBJECT (other_agent), "stream-id"));
+  nice_agent_set_remote_credentials (other_agent, other_stream_id, ufrag,
+      password);
+
+  g_free (ufrag);
+  g_free (password);
+}
+
+static void
 run_agent (TestIOStreamThreadData *data, NiceAgent *agent)
 {
   guint stream_id;
@@ -337,7 +372,7 @@ spawn_thread (const gchar *thread_name, GThreadFunc thread_func,
   GThread *thread;
 
   thread = g_thread_new (thread_name, thread_func, user_data);
-  g_assert (thread);
+  g_assert_true (thread);
 
   return thread;
 }
@@ -346,7 +381,8 @@ void
 run_io_stream_test (guint deadlock_timeout, gboolean reliable,
     const TestIOStreamCallbacks *callbacks,
     gpointer l_user_data, GDestroyNotify l_user_data_free,
-    gpointer r_user_data, GDestroyNotify r_user_data_free)
+    gpointer r_user_data, GDestroyNotify r_user_data_free,
+    TestIOStreamOption flags)
 {
   GMainLoop *error_loop;
   GThread *l_main_thread, *r_main_thread;
@@ -396,9 +432,9 @@ run_io_stream_test (guint deadlock_timeout, gboolean reliable,
 
   /* Create the L and R agents. */
   l_data.agent = create_agent (TRUE, &l_data,
-      &l_data.main_context, &l_data.main_loop);
+      &l_data.main_context, &l_data.main_loop, flags);
   r_data.agent = create_agent (FALSE, &r_data,
-      &r_data.main_context, &r_data.main_loop);
+      &r_data.main_context, &r_data.main_loop, flags);
 
   g_object_set_data (G_OBJECT (l_data.agent), "other-agent", r_data.agent);
   g_object_set_data (G_OBJECT (r_data.agent), "other-agent", l_data.agent);
@@ -411,6 +447,8 @@ run_io_stream_test (guint deadlock_timeout, gboolean reliable,
 
   add_stream (l_data.agent);
   add_stream (r_data.agent);
+  swap_credentials (l_data.agent);
+  swap_credentials (r_data.agent);
   run_agent (&l_data, l_data.agent);
   run_agent (&r_data, r_data.agent);
 
@@ -511,6 +549,8 @@ check_for_termination (TestIOStreamThreadData *data, gsize *recv_count,
   while (*send_count < expected_recv_count) {
     if (data->callbacks->wait_transmission_cb) {
       data->callbacks->wait_transmission_cb (data->agent);
+    } else {
+      g_thread_yield ();
     }
   }
 
@@ -543,19 +583,23 @@ check_for_termination (TestIOStreamThreadData *data, gsize *recv_count,
   data->done = TRUE;
   if (data->other->done)
     g_main_loop_quit (data->error_loop);
+}
 
-  /* If both sides have finished, quit the test main loop. */
-  if (*recv_count > expected_recv_count &&
-      *other_recv_count > expected_recv_count) {
-    g_main_loop_quit (data->error_loop);
-  }
+static gboolean
+stop_main_loop_when_idle (gpointer data)
+{
+  GMainLoop *loop = data;
+
+  g_main_loop_quit (loop);
+
+  return G_SOURCE_REMOVE;
 }
 
 void
 stop_main_loop (GMainLoop *loop)
 {
   GSource *src = g_idle_source_new ();
-  g_source_set_callback (src, G_SOURCE_FUNC (g_main_loop_quit),
+  g_source_set_callback (src, stop_main_loop_when_idle,
       g_main_loop_ref (loop), (GDestroyNotify) g_main_loop_unref);
   g_source_attach (src, g_main_loop_get_context (loop));
   g_source_unref (src);
